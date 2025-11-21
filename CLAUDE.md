@@ -28,15 +28,25 @@ The border router collects sensor data from Thread-enabled devices via a CoAP se
    - Queues data for AWS publishing via `g_aws_queue`
 
 3. **AWS IoT Integration**: MQTT client for cloud connectivity
-   - Implemented in `main/aws_task.c` and `components/aws_mqtt/`
-   - Uses coreMQTT library for MQTT operations
-   - X.509 certificates embedded at build time (AWS Root CA, device cert, private key)
-   - Fleet Provisioning support via CSR (Certificate Signing Request)
-   - Publishes to AWS topic `thread/sensores`
+   - **Primary implementation**: `main/aws_task.c` with `components/aws_helpers/`
+   - **Transport layer**: `network_transport.c/h` using ESP-IDF's esp-tls for TLS 1.2 connections
+   - **MQTT library**: coreMQTT v1.1.0+ from AWS IoT Device SDK for Embedded C
+   - **Authentication**: X.509 certificates embedded at build time (AWS Root CA, device cert, private key)
+   - **Connection features**:
+     - Automatic reconnection with exponential backoff (1s to 32s, max 5 retries)
+     - QoS 1 (at-least-once) message delivery
+     - Persistent sessions (cleanSession=false)
+     - Keep-alive: 60 seconds with automatic PINGREQ/PINGRESP
+   - **Data publishing**: JSON payloads to `thread/sensores` topic
+   - **Current endpoint**: `a216nupm45ewkv-ats.iot.us-east-2.amazonaws.com:8883`
+   - **Legacy component**: `components/aws_mqtt/` contains Fleet Provisioning code (not currently used)
 
 4. **Inter-Task Communication**: FreeRTOS queue for data flow
    - Defined in `main/shared_data.h`
-   - `g_aws_queue`: Passes sensor data from CoAP task to AWS task
+   - **Queue handle**: `g_aws_queue` (global, initialized in `app_main()`)
+   - **Capacity**: 10 items of type `sensor_data_t`
+   - **Flow**: Thread CoAP task → Queue → AWS IoT task
+   - **Behavior**: Non-blocking send with overflow logging, 1-second blocking receive in AWS task
 
 ### Storage and Partitioning
 
@@ -104,12 +114,19 @@ Critical configurations in `sdkconfig.defaults`:
 
 ### Component Dependencies
 
-Located in external AWS IoT SDK (configured in root `CMakeLists.txt`):
-- `coreMQTT`: MQTT client library
-- `corePKCS11`: PKCS#11 cryptographic operations
-- `Fleet-Provisioning-for-AWS-IoT-embedded-sdk`: Device provisioning
-- `backoffAlgorithm`: Retry logic with exponential backoff
-- `posix_compat`: POSIX compatibility layer
+**Active dependencies** (referenced in root `CMakeLists.txt`):
+- `coreMQTT`: MQTT 3.1.1 client library (AWS IoT Device SDK)
+- `backoffAlgorithm`: Exponential backoff for connection retries (1s-32s range)
+- `posix_compat`: POSIX API compatibility layer for FreeRTOS
+
+**Inactive/Optional dependencies** (available but not actively used):
+- `corePKCS11`: PKCS#11 cryptographic operations (for hardware secure elements)
+- `Fleet-Provisioning-for-AWS-IoT-embedded-sdk`: Device provisioning with CSR
+
+**Project-specific components**:
+- `aws_helpers`: Custom component with TLS transport and clock utilities
+  - `network_transport.c/h`: ESP-IDF esp-tls integration for MQTT
+  - `clock_esp.c/h`: Time functions required by coreMQTT
 
 ## Code Structure
 
@@ -118,15 +135,34 @@ Located in external AWS IoT SDK (configured in root `CMakeLists.txt`):
 - **Thread_BR.c**: Entry point (`app_main`), initializes:
   - SPIFFS for RCP firmware storage
   - NVS flash
-  - mDNS with hostname
+  - mDNS with hostname `esp-ot-br`
+  - **AWS queue**: Creates `g_aws_queue` with capacity of 10 sensor_data_t items
   - OpenThread border router
   - Calls `launch_openthread_border_router()` to start OTBR
+  - **Key addition**: Queue MUST be created before `launch_openthread_border_router()` to ensure availability for tasks
 
-- **aws_task.c**: AWS IoT MQTT task
-  - Creates `aws_iot_task` on FreeRTOS (8KB stack, priority 5)
-  - Waits for sensor data on `g_aws_queue`
-  - Publishes JSON formatted data: `{"id":"...", "temp":..., "hum":..., "gas":...}`
-  - **TODO in code**: Endpoint URL at line 12 must be customized for your AWS account
+- **aws_task.c**: AWS IoT MQTT task (**FULLY IMPLEMENTED**)
+  - **Task configuration**: 8KB stack, priority 5, 2-second startup delay
+  - **Connection flow**:
+    1. Initialize TLS network context with embedded certificates
+    2. Establish TLS 1.2 connection to AWS IoT endpoint
+    3. Initialize coreMQTT context with TransportInterface
+    4. Send MQTT CONNECT with client ID = Thing name
+  - **Main loop**:
+    - Reads `sensor_data_t` from `g_aws_queue` (1-second timeout)
+    - Formats JSON: `{"id":"...","temp":...,"hum":...,"press":...,"gas":...}`
+    - Publishes to topic `thread/sensores` with QoS 1
+    - Calls `MQTT_ProcessLoop()` for keep-alive and PUBACK handling
+  - **Error handling**:
+    - Detects connection failures (send/recv errors, timeout)
+    - Automatic reconnection with exponential backoff (max 5 attempts)
+    - Graceful disconnection on unrecoverable errors
+  - **Configuration** (lines 29-32):
+    - `AWS_IOT_ENDPOINT`: Currently set to `a216nupm45ewkv-ats.iot.us-east-2.amazonaws.com`
+    - `AWS_IOT_THING_NAME`: `esp32_thread_border_router`
+    - `MQTT_TOPIC`: `thread/sensores`
+    - `MQTT_PORT`: 8883 (standard MQTT/TLS)
+  - **Detailed comments**: Lines 13-28 provide complete configuration instructions
 
 - **thread_coap_task.c**: CoAP server for Thread sensor data
   - Registers CoAP resource at `sensor/data`
@@ -143,34 +179,43 @@ Located in external AWS IoT SDK (configured in root `CMakeLists.txt`):
   - SPI RCP configuration (optional alternative)
   - SPIFFS mount paths for RCP firmware
 
-### AWS Component (`components/aws_mqtt/`)
+### AWS Helpers Component (`components/aws_helpers/`)
 
-- **mqtt_operations.c/h**: MQTT protocol operations
-  - Connect, disconnect, publish, subscribe
-  - Handles network transport (TLS)
+**NEW COMPONENT** - Lightweight TLS transport for coreMQTT:
 
-- **pkcs11_operations.c/h**: Certificate and key management
-  - Loads X.509 device certificate from embedded binary
-  - Manages private key for TLS client authentication
+- **network_transport.c/h**: TLS transport implementation
+  - Uses ESP-IDF's `esp-tls` library (not PKCS#11)
+  - Functions: `xTlsConnect()`, `xTlsDisconnect()`, `TLS_FreeRTOS_send()`, `TLS_FreeRTOS_recv()`
+  - Certificate loading: Embedded binary format (not file-based)
+  - SNI support: Enabled by default (required by AWS IoT)
+  - ALPN support: Optional for port 443 (`x-amzn-mqtt-ca` protocol)
+  - Timeouts: Configurable via `vTlsSetConnectTimeout()`, `vTlsSetSendTimeout()`, `vTlsSetRecvTimeout()`
+  - Source: Copied from `~/esp/esp-aws-iot/libraries/coreMQTT/port/network_transport/`
 
-- **fleet_provisioning_with_csr_demo.c**: AWS Fleet Provisioning workflow
-  - Generates Certificate Signing Request (CSR)
-  - Registers device using provisioning template
-  - Activates provisioned certificate
+- **clock_esp.c/h**: Time utilities for coreMQTT
+  - `Clock_GetTimeMs()`: Returns milliseconds since boot (uint32_t)
+  - `Clock_SleepMs()`: FreeRTOS task delay wrapper
+  - Implementation: Uses `esp_timer_get_time()` / 1000
+  - Source: Copied from `~/esp/esp-aws-iot/libraries/common/posix_compat/`
 
-- **fleet_provisioning_serializer.c/h**: Protocol serialization
-  - Encodes/decodes provisioning messages
+- **CMakeLists.txt**: Component registration
+  - Sources: `network_transport.c`, `clock_esp.c`
+  - Dependencies: `esp-tls`, `mbedtls`
 
-- **mbedtls_pkcs11_posix.c/h**: TLS/PKCS#11 integration
-  - Bridges mbedTLS with PKCS#11 interface
+### Legacy AWS Component (`components/aws_mqtt/`)
 
-- **demo_config.h**: Default configurations
-  - Client ID, broker endpoint, port, buffer sizes
+⚠️ **NOTE**: This component contains Fleet Provisioning code that is **NOT CURRENTLY USED**. The project uses direct X.509 certificate authentication via `aws_helpers` instead.
 
-- **Kconfig.projbuild**: Build-time configuration menu
-  - MQTT broker endpoint and port
-  - Device serial number
-  - PKI credential access method (flash storage default)
+Contents (for reference only):
+- **mqtt_operations.c/h**: High-level MQTT wrappers (not used by aws_task.c)
+- **pkcs11_operations.c/h**: Hardware crypto integration (not needed for embedded certs)
+- **fleet_provisioning_with_csr_demo.c**: Automated device provisioning (optional feature)
+- **fleet_provisioning_serializer.c/h**: Provisioning protocol serialization
+- **mbedtls_pkcs11_posix.c/h**: PKCS#11 wrapper for mbedTLS
+- **demo_config.h**: Legacy configuration file
+- **Kconfig.projbuild**: Build-time menu (not actively used)
+
+**Potential cleanup**: This component can be simplified or removed if Fleet Provisioning is not needed.
 
 ### Certificates (`certs/`)
 
@@ -190,10 +235,11 @@ Referenced in `main/CMakeLists.txt` with `EMBED_TXTFILES` for binary embedding.
    . $IDF_PATH/export.sh
    ```
 
-2. Update AWS configuration in `main/aws_task.c` (lines 11-14):
-   - Set `AWS_IOT_ENDPOINT` to your AWS account endpoint
-   - Set `AWS_IOT_THING_NAME` to match your thing name
-   - Optional: Change `MQTT_TOPIC` if needed
+2. Update AWS configuration in `main/aws_task.c` (lines 29-32):
+   - Set `AWS_IOT_ENDPOINT` to your AWS account endpoint (get from AWS IoT Console > Settings)
+   - Set `AWS_IOT_THING_NAME` to match your Thing name in AWS IoT Core
+   - Optional: Change `MQTT_TOPIC` if needed (ensure IAM policy allows publish)
+   - Detailed instructions in comments at lines 13-28
 
 3. Replace certificate files in `certs/`:
    - Download from AWS IoT Console: Certificates > Your device
@@ -211,8 +257,13 @@ Referenced in `main/CMakeLists.txt` with `EMBED_TXTFILES` for binary embedding.
 - Ensure queue capacity; current code logs and discards on full queue
 
 **Adding MQTT Publish Topics**
-- File: `main/aws_task.c`, in `aws_iot_task()` loop
-- Use `MQTT_Publish()` with topic string and payload
+- File: `main/aws_task.c`, in `aws_iot_task()` loop (starting line 210)
+- Current implementation publishes to `thread/sensores` with QoS 1
+- To add topics:
+  1. Define new topic string constant (e.g., `#define MQTT_TOPIC_ALERTS "thread/alerts"`)
+  2. Create `MQTTPublishInfo_t` structure with topic name and payload
+  3. Call `MQTT_Publish(&mqttContext, &publishInfo, packetId)`
+  4. Ensure IAM policy in AWS IoT allows publish to new topic
 - Monitor queue depth to prevent backlog
 
 **Changing Partition Layout**
@@ -273,9 +324,13 @@ Referenced in `main/CMakeLists.txt` with `EMBED_TXTFILES` for binary embedding.
 
 ### Queue Behavior
 
-- `g_aws_queue` drops data when full (log warning in `thread_coap_task.c:26-27`)
-- Increase queue size in application code if frequent drops occur
-- Current implicit size needs explicit queue creation in `app_main` or task
+- **Queue creation**: `g_aws_queue` is created in `Thread_BR.c:71-76` with capacity of 10 items
+- **Full queue handling**: CoAP task logs warning and discards data (`thread_coap_task.c:26-27`)
+- **Queue timeout**: AWS task waits 1 second for data before processing keep-alive
+- **Increasing capacity**: Modify `xQueueCreate(10, ...)` in `Thread_BR.c` to larger value
+- **Memory impact**: Each item is `sizeof(sensor_data_t)` ≈ 64 bytes
+  - Queue 10: ~640 bytes
+  - Queue 20: ~1280 bytes
 
 ## Third-Party Dependencies
 
@@ -295,10 +350,51 @@ Run `idf.py update-dependencies` to sync with latest versions.
 | Issue | Solution |
 |-------|----------|
 | Build fails: `IDF_PATH` not set | Run `. $IDF_PATH/export.sh` |
-| MQTT connect timeout | Verify AWS endpoint in `aws_task.c:12`, check internet connectivity |
-| CoAP data not queued | Check RCP is running (UART logs), verify Thread network joined |
+| **TLS connection failure** | Verify certificates in `certs/` are valid, check AWS endpoint in `aws_task.c:29`, ensure internet connectivity via Ethernet |
+| **MQTT_BAD_RESPONSE error** | Thing name mismatch: Check `AWS_IOT_THING_NAME` (line 30) matches AWS IoT Console. Verify IAM policy is attached to certificate. |
+| **PUBACK not received** | QoS 1 timeout: Check `MQTT_ProcessLoop()` is called regularly. Increase network buffer if payloads are large (>2KB). |
+| **Connection retries exhausted** | All 5 backoff attempts failed: Check Ethernet link, AWS endpoint DNS resolution, firewall rules for port 8883. View logs for specific TLS error codes. |
+| **Queue full warnings** | CoAP receiving faster than AWS publishes: Increase queue size in `Thread_BR.c:71` or reduce sensor reporting rate. |
+| CoAP data not queued | Check RCP is running (UART logs), verify Thread network joined, ensure `g_aws_queue` created before CoAP task starts |
 | No mDNS response for `esp-ot-br` | Ensure mDNS configured in `sdkconfig.defaults`, IPv6 enabled on network |
 | RCP firmware update fails | Ensure `rcp_fw` partition has ≥1M space, check UART connection |
 | Ethernet not detected | Verify W5500 pin config in `sdkconfig.defaults` matches hardware |
 | Flash size exceeded | Use `idf.py size-components` to identify large components; optimize or expand partition |
+| **AWS Task crashes/reboots** | Stack overflow: Monitor with `uxTaskGetStackHighWaterMark()`. Increase stack from 8192 if needed. Check for null pointer dereferences in certificate loading. |
+
+### AWS IoT Specific Logs
+
+**Successful connection sequence:**
+```
+I (2000) AWS_TASK: AWS IoT Task started
+I (2010) AWS_TASK: Initializing TLS network context...
+I (2015) AWS_TASK: Network context initialized
+I (2020) AWS_TASK: Connection attempt 1 of 5
+I (2025) AWS_TASK: Connecting to AWS IoT endpoint: a216nupm45ewkv-ats.iot.us-east-2.amazonaws.com:8883
+I (3500) AWS_TASK: TLS connection established successfully
+I (3505) AWS_TASK: Initializing MQTT context...
+I (3510) AWS_TASK: MQTT context initialized successfully
+I (3515) AWS_TASK: Connecting to AWS IoT Core via MQTT...
+I (3700) AWS_TASK: CONNACK received
+I (3705) AWS_TASK: Connected to AWS IoT Core successfully!
+I (3710) AWS_TASK: Session present: NO
+I (3715) AWS_TASK: Successfully connected on attempt 1
+I (3720) AWS_TASK: Connection established. Entering main loop...
+I (4720) AWS_TASK: Publishing: {"id":"sensor_001","temp":25.50,"hum":60.20,"press":1013.25,"gas":150.00}
+I (4800) AWS_TASK: PUBACK received for packet ID: 1
+I (4805) AWS_TASK: Published successfully with packet ID: 1
+```
+
+**Reconnection with backoff:**
+```
+W (60000) AWS_TASK: MQTT_ProcessLoop returned status: 7  // MQTTKeepAliveTimeout
+E (60005) AWS_TASK: Connection lost! Attempting to reconnect...
+I (60010) AWS_TASK: Connection attempt 1 of 5
+W (62000) AWS_TASK: TLS connection failed on attempt 1
+W (62005) AWS_TASK: Retrying in 1000 ms...
+I (63010) AWS_TASK: Connection attempt 2 of 5
+...
+I (65500) AWS_TASK: Successfully connected on attempt 2
+I (65505) AWS_TASK: Reconnected successfully!
+```
 
