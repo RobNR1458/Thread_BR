@@ -201,19 +201,60 @@ void aws_iot_task(void *param)
         return;
     }
 
-    ESP_LOGI(TAG, "Connection established. Entering main loop (no publishing yet)...");
+    ESP_LOGI(TAG, "Connection established. Entering main loop...");
 
-    // Bucle principal: Solo mantener conexión con keep-alive
+    sensor_data_t sensor_data;
+    char json_payload[256];
+
+    // Bucle principal: Publicar datos desde la cola
     while (1) {
-        // Procesar loop de MQTT para keep-alive y recibir paquetes
-        MQTTStatus_t mqttStatus = MQTT_ProcessLoop(&mqttContext);
+        // Intentar recibir datos de la cola (espera máximo 1 segundo)
+        if (xQueueReceive(g_aws_queue, &sensor_data, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            // Formatear JSON con los datos del sensor
+            int len = snprintf(json_payload, sizeof(json_payload),
+                "{\"id\":\"%s\",\"temp\":%.2f,\"hum\":%.2f,\"press\":%.2f,\"gas\":%.2f}",
+                sensor_data.device_id,
+                sensor_data.temperature,
+                sensor_data.humidity,
+                sensor_data.pressure,
+                sensor_data.gas_concentration);
 
-        if (mqttStatus != MQTTSuccess) {
-            ESP_LOGW(TAG, "MQTT_ProcessLoop returned status: %d", mqttStatus);
+            if (len > 0 && len < sizeof(json_payload)) {
+                ESP_LOGI(TAG, "Publishing: %s", json_payload);
+
+                // Configurar información de publicación
+                MQTTPublishInfo_t publishInfo;
+                memset(&publishInfo, 0, sizeof(publishInfo));
+                publishInfo.qos = MQTTQoS1;  // QoS 1: at least once
+                publishInfo.retain = false;
+                publishInfo.dup = false;
+                publishInfo.pTopicName = MQTT_TOPIC;
+                publishInfo.topicNameLength = strlen(MQTT_TOPIC);
+                publishInfo.pPayload = json_payload;
+                publishInfo.payloadLength = len;
+
+                // Obtener un packet ID único
+                uint16_t packetId = MQTT_GetPacketId(&mqttContext);
+
+                // Publicar
+                MQTTStatus_t mqttStatus = MQTT_Publish(&mqttContext, &publishInfo, packetId);
+
+                if (mqttStatus != MQTTSuccess) {
+                    ESP_LOGE(TAG, "MQTT_Publish failed with status: %d", mqttStatus);
+                } else {
+                    ESP_LOGI(TAG, "Published successfully with packet ID: %u", packetId);
+                }
+            } else {
+                ESP_LOGW(TAG, "JSON payload too large or formatting error");
+            }
         }
 
-        // Esperar 1 segundo antes del siguiente ciclo
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        // Procesar loop de MQTT para keep-alive y ACKs (especialmente PUBACK para QoS1)
+        MQTTStatus_t mqttStatus = MQTT_ProcessLoop(&mqttContext);
+
+        if (mqttStatus != MQTTSuccess && mqttStatus != MQTTNeedMoreBytes) {
+            ESP_LOGW(TAG, "MQTT_ProcessLoop returned status: %d", mqttStatus);
+        }
     }
 
     // Cleanup (nunca debería llegar aquí)
