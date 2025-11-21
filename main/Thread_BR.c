@@ -21,8 +21,13 @@
 #include "border_router_launch.h"
 #include "esp_br_web.h"
 #include "esp_partition.h"
+#include "freertos/queue.h"
+#include "shared_data.h"
 
 #define TAG "esp_ot_br"
+
+// Global AWS queue definition
+QueueHandle_t g_aws_queue = NULL;
 
 
 static esp_err_t init_spiffs(void)
@@ -61,6 +66,14 @@ void app_main(void)
     ESP_ERROR_CHECK(esp_event_loop_create_default());
     ESP_ERROR_CHECK(mdns_init());
     ESP_ERROR_CHECK(mdns_hostname_set("esp-ot-br"));
-    
+
+    // Create AWS queue for sensor data before starting tasks
+    g_aws_queue = xQueueCreate(10, sizeof(sensor_data_t));
+    if (g_aws_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create AWS queue");
+        abort();
+    }
+    ESP_LOGI(TAG, "AWS queue created successfully (capacity: 10)");
+
     launch_openthread_border_router(&platform_config, &rcp_update_config);
 }
