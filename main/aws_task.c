@@ -7,6 +7,7 @@
 #include "core_mqtt.h"
 #include "network_transport.h"
 #include "clock.h"
+#include "backoff_algorithm.h"
 #include "shared_data.h"
 
 // *** IMPORTANTE: Configura estos valores para tu cuenta AWS ***
@@ -163,6 +164,63 @@ static bool connect_mqtt(void)
     return true;
 }
 
+// Función para conectar con reintentos
+static bool connect_with_backoff(void)
+{
+    BackoffAlgorithmContext_t backoffContext;
+    BackoffAlgorithmStatus_t backoffStatus;
+    uint16_t nextRetryBackoff = 0;
+    bool connected = false;
+    int attempt = 0;
+    const int maxRetries = 5;
+
+    // Inicializar backoff: 1 segundo base, 32 segundos máximo
+    BackoffAlgorithm_InitializeParams(&backoffContext, 1000, 32000, maxRetries);
+
+    for (attempt = 0; attempt < maxRetries && !connected; attempt++) {
+        ESP_LOGI(TAG, "Connection attempt %d of %d", attempt + 1, maxRetries);
+
+        // Paso 1: Conectar TLS
+        if (!connect_tls()) {
+            ESP_LOGW(TAG, "TLS connection failed on attempt %d", attempt + 1);
+            goto retry;
+        }
+
+        // Paso 2: Inicializar MQTT
+        if (!initialize_mqtt()) {
+            ESP_LOGW(TAG, "MQTT initialization failed on attempt %d", attempt + 1);
+            xTlsDisconnect(&networkContext);
+            goto retry;
+        }
+
+        // Paso 3: Conectar MQTT
+        if (!connect_mqtt()) {
+            ESP_LOGW(TAG, "MQTT connection failed on attempt %d", attempt + 1);
+            xTlsDisconnect(&networkContext);
+            goto retry;
+        }
+
+        // ¡Conexión exitosa!
+        connected = true;
+        ESP_LOGI(TAG, "Successfully connected on attempt %d", attempt + 1);
+        break;
+
+retry:
+        // Calcular delay de backoff exponencial
+        backoffStatus = BackoffAlgorithm_GetNextBackoff(&backoffContext, &nextRetryBackoff);
+
+        if (backoffStatus == BackoffAlgorithmSuccess) {
+            ESP_LOGW(TAG, "Retrying in %u ms...", nextRetryBackoff);
+            vTaskDelay(pdMS_TO_TICKS(nextRetryBackoff));
+        } else if (backoffStatus == BackoffAlgorithmRetriesExhausted) {
+            ESP_LOGE(TAG, "All retry attempts exhausted");
+            break;
+        }
+    }
+
+    return connected;
+}
+
 // Tarea principal de AWS IoT
 void aws_iot_task(void *param)
 {
@@ -171,32 +229,16 @@ void aws_iot_task(void *param)
     // Esperar un poco para que la red esté lista
     vTaskDelay(pdMS_TO_TICKS(2000));
 
-    // Paso 1: Inicializar contexto de red
+    // Inicializar contexto de red (solo una vez)
     if (!initialize_network_context()) {
         ESP_LOGE(TAG, "Failed to initialize network context. Exiting task.");
         vTaskDelete(NULL);
         return;
     }
 
-    // Paso 2: Conectar TLS
-    if (!connect_tls()) {
-        ESP_LOGE(TAG, "Failed to establish TLS connection. Exiting task.");
-        vTaskDelete(NULL);
-        return;
-    }
-
-    // Paso 3: Inicializar MQTT
-    if (!initialize_mqtt()) {
-        ESP_LOGE(TAG, "Failed to initialize MQTT. Exiting task.");
-        xTlsDisconnect(&networkContext);
-        vTaskDelete(NULL);
-        return;
-    }
-
-    // Paso 4: Conectar MQTT
-    if (!connect_mqtt()) {
-        ESP_LOGE(TAG, "Failed to connect MQTT. Exiting task.");
-        xTlsDisconnect(&networkContext);
+    // Conectar con backoff exponencial
+    if (!connect_with_backoff()) {
+        ESP_LOGE(TAG, "Failed to connect after all retries. Exiting task.");
         vTaskDelete(NULL);
         return;
     }
@@ -254,6 +296,26 @@ void aws_iot_task(void *param)
 
         if (mqttStatus != MQTTSuccess && mqttStatus != MQTTNeedMoreBytes) {
             ESP_LOGW(TAG, "MQTT_ProcessLoop returned status: %d", mqttStatus);
+
+            // Si hay un error crítico, intentar reconectar
+            if (mqttStatus == MQTTSendFailed || mqttStatus == MQTTRecvFailed ||
+                mqttStatus == MQTTBadResponse || mqttStatus == MQTTKeepAliveTimeout) {
+
+                ESP_LOGE(TAG, "Connection lost! Attempting to reconnect...");
+
+                // Desconectar limpiamente
+                MQTT_Disconnect(&mqttContext);
+                xTlsDisconnect(&networkContext);
+
+                // Intentar reconectar con backoff
+                if (connect_with_backoff()) {
+                    ESP_LOGI(TAG, "Reconnected successfully!");
+                } else {
+                    ESP_LOGE(TAG, "Reconnection failed after all retries. Exiting task.");
+                    vTaskDelete(NULL);
+                    return;
+                }
+            }
         }
     }
 
