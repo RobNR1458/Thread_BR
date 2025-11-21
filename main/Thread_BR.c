@@ -29,6 +29,10 @@
 // Global AWS queue definition
 QueueHandle_t g_aws_queue = NULL;
 
+// Declaración de funciones externas
+extern void start_aws_client(void);
+extern void start_thread_coap_server(void);
+
 
 static esp_err_t init_spiffs(void)
 {
@@ -48,7 +52,9 @@ void app_main(void)
     // * netif
     // * task queue
     // * border router
-    size_t max_eventfd = 3;
+    // * discovery delegate (WiFi)
+    // * additional WiFi events
+    size_t max_eventfd = 6;
     esp_vfs_eventfd_config_t eventfd_config = {
         .max_fds = max_eventfd,
     };
@@ -74,6 +80,14 @@ void app_main(void)
         abort();
     }
     ESP_LOGI(TAG, "AWS queue created successfully (capacity: 10)");
+
+    // Start CoAP server for receiving Thread sensor data
+    ESP_LOGI(TAG, "Starting Thread CoAP server...");
+    start_thread_coap_server();
+
+    // Start AWS IoT client for cloud publishing
+    ESP_LOGI(TAG, "Starting AWS IoT client...");
+    start_aws_client();
 
     launch_openthread_border_router(&platform_config, &rcp_update_config);
 }

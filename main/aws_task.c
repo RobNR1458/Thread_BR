@@ -37,10 +37,10 @@ static const char *TAG = "AWS_TASK";
 // Certificados embebidos (definidos en CMakeLists.txt)
 extern const uint8_t aws_root_ca_pem_start[] asm("_binary_aws_root_ca_pem_start");
 extern const uint8_t aws_root_ca_pem_end[]   asm("_binary_aws_root_ca_pem_end");
-extern const uint8_t device_cert_pem_start[] asm("_binary_device_cert_pem_start");
-extern const uint8_t device_cert_pem_end[]   asm("_binary_device_cert_pem_end");
-extern const uint8_t device_key_pem_start[]  asm("_binary_device_key_pem_start");
-extern const uint8_t device_key_pem_end[]    asm("_binary_device_key_pem_end");
+extern const uint8_t device_cert_pem_start[] asm("_binary_device_crt_start");
+extern const uint8_t device_cert_pem_end[]   asm("_binary_device_crt_end");
+extern const uint8_t device_key_pem_start[]  asm("_binary_device_key_start");
+extern const uint8_t device_key_pem_end[]    asm("_binary_device_key_end");
 
 // MQTT context y buffers
 static MQTTContext_t mqttContext;
@@ -244,8 +244,9 @@ void aws_iot_task(void *param)
 {
     ESP_LOGI(TAG, "AWS IoT Task started");
 
-    // Esperar un poco para que la red esté lista
-    vTaskDelay(pdMS_TO_TICKS(2000));
+    // Esperar a que WiFi obtenga IP (típicamente toma ~6-8 segundos)
+    ESP_LOGI(TAG, "Waiting for network to be ready...");
+    vTaskDelay(pdMS_TO_TICKS(10000));
 
     // Inicializar contexto de red (solo una vez)
     if (!initialize_network_context()) {
