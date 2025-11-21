@@ -4,6 +4,7 @@
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "core_mqtt.h"
 #include "network_transport.h"
 #include "clock.h"
@@ -26,7 +27,7 @@
 //    - device.crt (Certificado del dispositivo)
 //    - device.key (Clave privada del dispositivo)
 //
-#define AWS_IOT_ENDPOINT    "tu-endpoint-aqui-ats.iot.us-east-1.amazonaws.com"
+#define AWS_IOT_ENDPOINT    "a216nupm45ewkv-ats.iot.us-east-2.amazonaws.com"
 #define AWS_IOT_THING_NAME  "esp32_thread_border_router"
 #define MQTT_TOPIC          "thread/sensores"
 #define MQTT_PORT           8883
@@ -82,7 +83,7 @@ static bool initialize_network_context(void)
     networkContext.pcClientCertSize = device_cert_pem_end - device_cert_pem_start;
     networkContext.pcClientKey = (const char *)device_key_pem_start;
     networkContext.pcClientKeySize = device_key_pem_end - device_key_pem_start;
-    networkContext.pDestinationURL = AWS_IOT_ENDPOINT;
+    networkContext.pcHostname = AWS_IOT_ENDPOINT;
     networkContext.xPort = MQTT_PORT;
     networkContext.disableSni = false;  // SNI es requerido por AWS IoT
     networkContext.pAlpnProtos = NULL;   // Solo necesario para puerto 443
@@ -126,8 +127,8 @@ static bool initialize_mqtt(void)
     // Inicializar contexto MQTT
     TransportInterface_t transport;
     transport.pNetworkContext = &networkContext;
-    transport.send = TLS_FreeRTOS_send;
-    transport.recv = TLS_FreeRTOS_recv;
+    transport.send = espTlsTransportSend;
+    transport.recv = espTlsTransportRecv;
     transport.writev = NULL;
 
     MQTTStatus_t mqttStatus = MQTT_Init(&mqttContext,
@@ -222,7 +223,9 @@ static bool connect_with_backoff(void)
 
 retry:
         // Calcular delay de backoff exponencial
-        backoffStatus = BackoffAlgorithm_GetNextBackoff(&backoffContext, &nextRetryBackoff);
+        // Generar un valor aleatorio para el jitter (0-1000ms)
+        uint32_t randomValue = esp_random() % 1000;
+        backoffStatus = BackoffAlgorithm_GetNextBackoff(&backoffContext, randomValue, &nextRetryBackoff);
 
         if (backoffStatus == BackoffAlgorithmSuccess) {
             ESP_LOGW(TAG, "Retrying in %u ms...", nextRetryBackoff);

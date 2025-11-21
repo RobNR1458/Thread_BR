@@ -30,8 +30,8 @@ static void coap_handler(void *aContext, otMessage *aMessage, const otMessageInf
 
     // 3. Responder con ACK (Opcional pero recomendado)
     if (aMessageInfo != NULL) {
-         otInstance *instance = (otInstance *)aContext;
          // Aquí iría la lógica simple de respuesta (omitiendo para brevedad)
+         (void)aContext; // Suprimir advertencia de variable no usada
     }
 }
 
@@ -46,10 +46,6 @@ void start_thread_coap_server(void)
     s_resource.mHandler = coap_handler;
     s_resource.mContext = instance;
 
-    otError error = otCoapAddResource(instance, &s_resource);
-    if (error == OT_ERROR_NONE) {
-        ESP_LOGI(TAG, "Recurso CoAP 'sensor/data' iniciado correctamente");
-    } else {
-        ESP_LOGE(TAG, "Error iniciando CoAP: %d", error);
-    }
+    otCoapAddResource(instance, &s_resource);
+    ESP_LOGI(TAG, "Recurso CoAP 'sensor/data' iniciado correctamente");
 }
