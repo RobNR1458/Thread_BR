@@ -11,6 +11,21 @@
 #include "shared_data.h"
 
 // *** IMPORTANTE: Configura estos valores para tu cuenta AWS ***
+//
+// 1. AWS_IOT_ENDPOINT: Obtener de AWS IoT Console > Settings > Device data endpoint
+//    Ejemplo: "a1b2c3d4e5f6g7-ats.iot.us-east-1.amazonaws.com"
+//
+// 2. AWS_IOT_THING_NAME: Nombre del Thing creado en AWS IoT Console > Manage > Things
+//    Debe coincidir exactamente con el nombre en AWS
+//
+// 3. MQTT_TOPIC: Topic donde se publicarán los datos de sensores
+//    Asegúrate de que tu Thing tenga permisos (Policy) para publicar en este topic
+//
+// 4. Certificados: Deben estar en certs/ y embeberse via CMakeLists.txt:
+//    - aws-root-ca.pem (Amazon Root CA 1)
+//    - device.crt (Certificado del dispositivo)
+//    - device.key (Clave privada del dispositivo)
+//
 #define AWS_IOT_ENDPOINT    "tu-endpoint-aqui-ats.iot.us-east-1.amazonaws.com"
 #define AWS_IOT_THING_NAME  "esp32_thread_border_router"
 #define MQTT_TOPIC          "thread/sensores"
