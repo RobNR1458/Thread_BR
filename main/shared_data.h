@@ -2,7 +2,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 
-// Estructura de los datos que vienen de tus sensores
+// Estructura de los datos que vienen de los sensores
 typedef struct {
     char device_id[16];
     float temperature;
