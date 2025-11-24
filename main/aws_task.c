@@ -48,6 +48,12 @@ static NetworkContext_t networkContext;
 static uint8_t networkBuffer[2048];
 static MQTTFixedBuffer_t mqttBuffer;
 
+// Buffers para QoS1/QoS2 (requeridos para publish con acknowledgement)
+#define OUTGOING_PUBLISH_RECORD_COUNT 10
+#define INCOMING_PUBLISH_RECORD_COUNT 10
+static MQTTPubAckInfo_t outgoingPublishRecords[OUTGOING_PUBLISH_RECORD_COUNT];
+static MQTTPubAckInfo_t incomingPublishRecords[INCOMING_PUBLISH_RECORD_COUNT];
+
 // Callback de eventos MQTT
 static void mqtt_event_callback(MQTTContext_t *pMqttContext,
                                  MQTTPacketInfo_t *pPacketInfo,
@@ -142,7 +148,19 @@ static bool initialize_mqtt(void)
         return false;
     }
 
-    ESP_LOGI(TAG, "MQTT context initialized successfully");
+    // Inicializar soporte para QoS1/QoS2 (requerido para MQTT_Publish con QoS > 0)
+    mqttStatus = MQTT_InitStatefulQoS(&mqttContext,
+                                       outgoingPublishRecords,
+                                       OUTGOING_PUBLISH_RECORD_COUNT,
+                                       incomingPublishRecords,
+                                       INCOMING_PUBLISH_RECORD_COUNT);
+
+    if (mqttStatus != MQTTSuccess) {
+        ESP_LOGE(TAG, "MQTT_InitStatefulQoS failed with status: %d", mqttStatus);
+        return false;
+    }
+
+    ESP_LOGI(TAG, "MQTT context initialized successfully with QoS1/QoS2 support");
     return true;
 }
 
@@ -268,9 +286,11 @@ void aws_iot_task(void *param)
     char json_payload[256];
 
     // Bucle principal: Publicar datos desde la cola
+    uint32_t loop_count = 0;
     while (1) {
         // Intentar recibir datos de la cola (espera máximo 1 segundo)
         if (xQueueReceive(g_aws_queue, &sensor_data, pdMS_TO_TICKS(1000)) == pdTRUE) {
+            ESP_LOGI(TAG, "Dato recibido de la cola");
             // Formatear JSON con los datos del sensor
             int len = snprintf(json_payload, sizeof(json_payload),
                 "{\"id\":\"%s\",\"temp\":%.2f,\"hum\":%.2f,\"press\":%.2f,\"gas\":%.2f}",
@@ -307,6 +327,12 @@ void aws_iot_task(void *param)
                 }
             } else {
                 ESP_LOGW(TAG, "JSON payload too large or formatting error");
+            }
+        } else {
+            // Solo loguear cada 30 segundos para no saturar logs
+            loop_count++;
+            if (loop_count % 30 == 0) {
+                ESP_LOGI(TAG, "Esperando datos en la cola... (loop %lu)", (unsigned long)loop_count);
             }
         }
 

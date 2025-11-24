@@ -1,7 +1,0 @@
-build/
-sdkconfig
-sdkconfig.olds
-certs/
-.vscode/
-.claude/
-AWS_SETUP.md
