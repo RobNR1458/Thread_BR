@@ -11,5 +11,5 @@ typedef struct {
     float gas_concentration;
 } sensor_data_t;
 
-// Referencia externa a la cola (definida en app_main.c)
+// Referencia externa a la cola, la cual se define en Thread_BR.c
 extern QueueHandle_t g_aws_queue;
