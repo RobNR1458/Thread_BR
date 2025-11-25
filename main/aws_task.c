@@ -285,6 +285,12 @@ void aws_iot_task(void *param)
     sensor_data_t sensor_data;
     char json_payload[256];
 
+    // Estadísticas de tamaño de mensajes MQTT
+    uint32_t msg_count = 0;
+    uint32_t msg_size_min = UINT32_MAX;
+    uint32_t msg_size_max = 0;
+    uint64_t msg_size_total = 0;
+
     // Bucle principal: Publicar datos desde la cola
     uint32_t loop_count = 0;
     while (1) {
@@ -323,7 +329,31 @@ void aws_iot_task(void *param)
                 if (mqttStatus != MQTTSuccess) {
                     ESP_LOGE(TAG, "MQTT_Publish failed with status: %d", mqttStatus);
                 } else {
+                    // Actualizar estadísticas de tamaño
+                    msg_count++;
+                    msg_size_total += len;
+                    if (len < msg_size_min) {
+                        msg_size_min = len;
+                    }
+                    if (len > msg_size_max) {
+                        msg_size_max = len;
+                    }
+                    uint32_t msg_size_avg = (uint32_t)(msg_size_total / msg_count);
+
                     ESP_LOGI(TAG, "Published successfully with packet ID: %u", packetId);
+                    ESP_LOGI(TAG, "Message size: %d bytes | Min: %lu | Max: %lu | Avg: %lu | Count: %lu",
+                             len, (unsigned long)msg_size_min, (unsigned long)msg_size_max,
+                             (unsigned long)msg_size_avg, (unsigned long)msg_count);
+
+                    // Log de resumen cada 10 mensajes
+                    if (msg_count % 10 == 0) {
+                        ESP_LOGI(TAG, "===== MQTT Message Size Summary (last %lu messages) =====", (unsigned long)msg_count);
+                        ESP_LOGI(TAG, "  Average: %lu bytes", (unsigned long)msg_size_avg);
+                        ESP_LOGI(TAG, "  Minimum: %lu bytes", (unsigned long)msg_size_min);
+                        ESP_LOGI(TAG, "  Maximum: %lu bytes", (unsigned long)msg_size_max);
+                        ESP_LOGI(TAG, "  Total published: %lu messages", (unsigned long)msg_count);
+                        ESP_LOGI(TAG, "========================================================");
+                    }
                 }
             } else {
                 ESP_LOGW(TAG, "JSON payload too large or formatting error");
