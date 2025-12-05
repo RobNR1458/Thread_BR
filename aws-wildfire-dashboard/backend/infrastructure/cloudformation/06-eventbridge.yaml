@@ -1,0 +1,37 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'EventBridge rule to trigger ML processor Lambda every 5 minutes'
+
+Resources:
+  # EventBridge Rule - Trigger ML Processor every 5 minutes
+  MLProcessorScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: wildfire-ml-processor-schedule
+      Description: Trigger ML anomaly detection every 5 minutes
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Arn: !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:ml-processor'
+          Id: MLProcessorTarget
+
+  # Lambda Permission for EventBridge
+  MLProcessorLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: ml-processor
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt MLProcessorScheduleRule.Arn
+
+Outputs:
+  RuleName:
+    Description: EventBridge rule name
+    Value: !Ref MLProcessorScheduleRule
+    Export:
+      Name: WildfireMLProcessorRuleName
+
+  RuleArn:
+    Description: EventBridge rule ARN
+    Value: !GetAtt MLProcessorScheduleRule.Arn
+    Export:
+      Name: WildfireMLProcessorRuleArn

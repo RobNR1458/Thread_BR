@@ -1,0 +1,14 @@
+{
+  "name": "api-realtime",
+  "version": "1.0.0",
+  "description": "API endpoint for real-time sensor data",
+  "main": "index.js",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "aws-xray-sdk-core": "^3.6.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

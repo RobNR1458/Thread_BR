@@ -1,0 +1,14 @@
+{
+  "ruleName": "SensorToEnricher",
+  "description": "Route sensor data to Lambda for enrichment (heat index, dew point, risk score)",
+  "sql": "SELECT * FROM 'thread/sensores'",
+  "actions": [
+    {
+      "lambda": {
+        "functionArn": "REPLACE_WITH_DATA_ENRICHER_LAMBDA_ARN"
+      }
+    }
+  ],
+  "ruleDisabled": false,
+  "awsIotSqlVersion": "2016-03-23"
+}

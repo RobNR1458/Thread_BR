@@ -1,0 +1,57 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'DynamoDB table for ML-generated alerts'
+
+Resources:
+  WildfireAlertsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: wildfire-alerts
+      BillingMode: PAY_PER_REQUEST  # On-demand pricing (better for variable traffic)
+      AttributeDefinitions:
+        - AttributeName: alertId
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+        - AttributeName: deviceId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: alertId
+          KeyType: HASH   # Partition key
+        - AttributeName: timestamp
+          KeyType: RANGE  # Sort key
+      GlobalSecondaryIndexes:
+        - IndexName: deviceId-timestamp-index
+          KeySchema:
+            - AttributeName: deviceId
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true  # Auto-delete alerts after 30 days
+      Tags:
+        - Key: Project
+          Value: WildfireDetection
+        - Key: Environment
+          Value: Production
+
+Outputs:
+  TableName:
+    Description: DynamoDB table name for alerts
+    Value: !Ref WildfireAlertsTable
+    Export:
+      Name: WildfireAlertsTableName
+
+  TableArn:
+    Description: DynamoDB table ARN
+    Value: !GetAtt WildfireAlertsTable.Arn
+    Export:
+      Name: WildfireAlertsTableArn
+
+  DeviceIndexName:
+    Description: GSI for querying by device ID
+    Value: deviceId-timestamp-index
+    Export:
+      Name: WildfireAlertsDeviceIndexName

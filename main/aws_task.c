@@ -10,6 +10,7 @@
 #include "clock.h"
 #include "backoff_algorithm.h"
 #include "shared_data.h"
+#include "wifi_onboarding.h"
 
 // *** IMPORTANTE: Configura estos valores para tu cuenta AWS ***
 //
@@ -262,9 +263,23 @@ void aws_iot_task(void *param)
 {
     ESP_LOGI(TAG, "AWS IoT Task started");
 
-    // Esperar a que WiFi obtenga IP (típicamente toma ~6-8 segundos)
-    ESP_LOGI(TAG, "Waiting for network to be ready...");
-    vTaskDelay(pdMS_TO_TICKS(10000));
+    // Esperar activamente hasta que WiFi obtenga IP
+    ESP_LOGI(TAG, "Waiting for WiFi connection...");
+    int wait_count = 0;
+    while (!wifi_onboarding_is_connected()) {
+        vTaskDelay(pdMS_TO_TICKS(1000));  // Check every second
+        wait_count++;
+        if (wait_count % 5 == 0) {
+            ESP_LOGI(TAG, "Still waiting for WiFi... (%d seconds)", wait_count);
+        }
+        // Timeout after 60 seconds
+        if (wait_count > 60) {
+            ESP_LOGE(TAG, "WiFi connection timeout after 60 seconds. Exiting task.");
+            vTaskDelete(NULL);
+            return;
+        }
+    }
+    ESP_LOGI(TAG, "WiFi connected! Proceeding with AWS connection...");
 
     // Inicializar contexto de red (solo una vez)
     if (!initialize_network_context()) {

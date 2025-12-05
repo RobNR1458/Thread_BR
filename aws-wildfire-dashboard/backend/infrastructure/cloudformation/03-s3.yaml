@@ -1,0 +1,63 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'S3 bucket for long-term sensor data archival'
+
+Resources:
+  SensorArchiveBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'wildfire-sensor-archive-${AWS::AccountId}'
+      VersioningConfiguration:
+        Status: Enabled
+      LifecycleConfiguration:
+        Rules:
+          - Id: ArchiveOldData
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: 90
+                StorageClass: GLACIER_FLEXIBLE_RETRIEVAL
+            ExpirationInDays: 365  # Delete after 1 year
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Project
+          Value: WildfireDetection
+        - Key: Environment
+          Value: Production
+
+  SensorArchiveBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref SensorArchiveBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowIoTRuleWrite
+            Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+            Action:
+              - 's3:PutObject'
+            Resource: !Sub '${SensorArchiveBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                'aws:SourceAccount': !Ref 'AWS::AccountId'
+
+Outputs:
+  BucketName:
+    Description: S3 bucket name for sensor data archive
+    Value: !Ref SensorArchiveBucket
+    Export:
+      Name: WildfireSensorArchiveBucketName
+
+  BucketArn:
+    Description: S3 bucket ARN
+    Value: !GetAtt SensorArchiveBucket.Arn
+    Export:
+      Name: WildfireSensorArchiveBucketArn

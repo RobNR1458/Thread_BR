@@ -1,0 +1,28 @@
+.chart-container {
+  height: 400px;
+  position: relative;
+  padding: 20px;
+}
+
+.chart-container .no-data {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: #999;
+  font-size: 1.1rem;
+}
+
+.chart-info {
+  margin-top: 15px;
+  text-align: center;
+  color: #666;
+  font-size: 0.9rem;
+}
+
+@media (max-width: 768px) {
+  .chart-container {
+    height: 300px;
+    padding: 10px;
+  }
+}

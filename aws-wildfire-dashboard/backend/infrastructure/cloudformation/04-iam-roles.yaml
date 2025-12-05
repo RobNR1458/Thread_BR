@@ -1,0 +1,161 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'IAM roles for IoT Rules and Lambda functions'
+
+Resources:
+  # IAM Role for IoT Rules to write to DynamoDB
+  IoTDynamoDBRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: IoTDynamoDBRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: DynamoDBWritePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:BatchWriteItem'
+                Resource:
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/wildfire-sensor-data'
+      Tags:
+        - Key: Project
+          Value: WildfireDetection
+
+  # IAM Role for IoT Rules to write to S3
+  IoTS3Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: IoTS3Role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: S3WritePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 's3:PutObject'
+                Resource:
+                  - !Sub 'arn:aws:s3:::wildfire-sensor-archive-${AWS::AccountId}/*'
+      Tags:
+        - Key: Project
+          Value: WildfireDetection
+
+  # IAM Role for IoT Rules to invoke Lambda
+  IoTLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: IoTLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: LambdaInvokePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'lambda:InvokeFunction'
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: WildfireDetection
+
+  # IAM Role for Lambda functions
+  WildfireLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: WildfireLambdaRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: 'sts:AssumeRole'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+        - 'arn:aws:iam::aws:policy/AWSXRayDaemonWriteAccess'
+      Policies:
+        - PolicyName: TimestreamAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:Query'
+                  - 'dynamodb:Scan'
+                  - 'dynamodb:BatchWriteItem'
+                Resource:
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/wildfire-sensor-data'
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/wildfire-sensor-data/index/*'
+        - PolicyName: DynamoDBAccessPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'dynamodb:PutItem'
+                  - 'dynamodb:GetItem'
+                  - 'dynamodb:Query'
+                  - 'dynamodb:Scan'
+                Resource:
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/wildfire-alerts'
+                  - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/wildfire-alerts/index/*'
+        - PolicyName: CloudWatchMetricsPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - 'cloudwatch:PutMetricData'
+                Resource: '*'
+      Tags:
+        - Key: Project
+          Value: WildfireDetection
+
+Outputs:
+  IoTDynamoDBRoleArn:
+    Description: IAM role ARN for IoT to DynamoDB
+    Value: !GetAtt IoTDynamoDBRole.Arn
+    Export:
+      Name: IoTDynamoDBRoleArn
+
+  IoTS3RoleArn:
+    Description: IAM role ARN for IoT to S3
+    Value: !GetAtt IoTS3Role.Arn
+    Export:
+      Name: IoTS3RoleArn
+
+  IoTLambdaRoleArn:
+    Description: IAM role ARN for IoT to Lambda
+    Value: !GetAtt IoTLambdaRole.Arn
+    Export:
+      Name: IoTLambdaRoleArn
+
+  WildfireLambdaRoleArn:
+    Description: IAM role ARN for Lambda functions
+    Value: !GetAtt WildfireLambdaRole.Arn
+    Export:
+      Name: WildfireLambdaRoleArn
